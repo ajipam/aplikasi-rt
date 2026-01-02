@@ -178,44 +178,44 @@ def main():
 
     # --- 1. DASHBOARD ---
     if choice == "Dashboard":
-        st.header("📊 Dashboard Keuangan RT")
-        tahun_ini = datetime.now().year
-        
-        # Load Data
-        df = pd.read_sql_query("SELECT * FROM transaksi", sqlite3.connect(DB_FILE))
-        df['tanggal'] = pd.to_datetime(df['tanggal'])
-        
-        # Metric Cards
-        total_masuk = df[df['tipe'] == 'Pemasukan']['nominal'].sum()
-        total_keluar = df[df['tipe'] == 'Pengeluaran']['nominal'].sum()
-        saldo = total_masuk - total_keluar
-        
-        col1, col2, col3 = st.columns(3)
-        col1.metric("💰 Saldo Akhir", f"Rp {saldo:,.0f}")
-        col2.metric("Total Masuk (All Time)", f"Rp {total_masuk:,.0f}")
-        col3.metric("Total Keluar (All Time)", f"Rp {total_keluar:,.0f}", delta_color="inverse")
-        
-        st.divider()
-        
-        # --- GRAFIK PENDAPATAN & PENGELUARAN PER BULAN (TAHUN INI) ---
-        st.subheader(f"Grafik Keuangan Tahun {tahun_ini}")
+        st.header("📊 Dashboard Real-time")
+        df = get_data("transaksi")
         
         if not df.empty:
-            # Filter tahun berjalan
-            df_year = df[df['tanggal'].dt.year == tahun_ini].copy()
+            # Pastikan format data benar
+            df['tanggal'] = pd.to_datetime(df['tanggal'])
+            # Paksa nominal jadi angka (kadang dari GSheets terbaca string)
+            df['nominal'] = pd.to_numeric(df['nominal'], errors='coerce').fillna(0)
             
-            if not df_year.empty:
-                # Format bulan menjadi nama atau angka (misal: "2024-01") agar urut
-                df_year['bulan_str'] = df_year['tanggal'].dt.strftime('%Y-%m')
-                
-                # Group by Bulan dan Tipe
-                chart_data = df_year.groupby(['bulan_str', 'tipe'])['nominal'].sum().unstack().fillna(0)
-                
-                # Tampilkan Chart
-                st.bar_chart(chart_data, color=["#FF4B4B", "#4CAF50"]) # Merah utk pengeluaran (biasanya), Hijau pemasukan. Streamlit auto assign by alphabet, kita sesuaikan datanya nanti.
-                st.caption("Grafik membandingkan total Pemasukan dan Pengeluaran setiap bulan.")
-            else:
-                st.info("Belum ada data transaksi di tahun ini.")
+            # Hitung Saldo
+            masuk = df[df['tipe'] == 'Pemasukan']['nominal'].sum()
+            keluar = df[df['tipe'] == 'Pengeluaran']['nominal'].sum()
+            
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Saldo", f"Rp {masuk-keluar:,.0f}")
+            c2.metric("Pemasukan", f"Rp {masuk:,.0f}")
+            c3.metric("Pengeluaran", f"Rp {keluar:,.0f}")
+            
+            st.subheader("Grafik Tahunan")
+            df['bulan'] = df['tanggal'].dt.strftime('%Y-%m')
+            
+            # Grouping data
+            chart = df.groupby(['bulan', 'tipe'])['nominal'].sum().unstack().fillna(0)
+            
+            # --- PERBAIKAN ERROR DI SINI ---
+            # Kita pastikan kolom 'Pemasukan' dan 'Pengeluaran' selalu ada
+            # agar warnanya tidak error
+            cols_expected = ['Pemasukan', 'Pengeluaran']
+            for col in cols_expected:
+                if col not in chart.columns:
+                    chart[col] = 0
+            
+            # Urutkan kolom agar Pemasukan selalu kiri (Hijau), Pengeluaran kanan (Merah)
+            chart = chart[['Pemasukan', 'Pengeluaran']]
+            
+            # Tampilkan dengan warna manual: Hijau (#4CAF50) & Merah (#FF4B4B)
+            st.bar_chart(chart, color=["#4CAF50", "#FF4B4B"])
+            
         else:
             st.info("Belum ada data transaksi.")
 
@@ -363,4 +363,5 @@ def main():
                 st.write("Tidak ada data untuk dicetak.")
 
 if __name__ == '__main__':
+
     main()
