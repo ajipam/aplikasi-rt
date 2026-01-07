@@ -105,6 +105,28 @@ def create_pdf(dataframe):
 # --- LOGIC UTAMA ---
 def main():
     st.set_page_config(page_title="Keuangan RT (Cloud)", layout="wide")
+# === TAMBAHAN: TOMBOL PERBAIKI HEADER ===
+    with st.sidebar:
+        st.header("🔧 Perbaikan Database")
+        if st.button("Reset Header Google Sheets"):
+            try:
+                sheet = connect_db()
+                # 1. Reset Header Transaksi
+                ws_trx = sheet.worksheet("transaksi")
+                # Cek apakah baris 1 sudah benar, jika ragu timpa saja
+                headers_trx = ['id', 'tanggal', 'tipe', 'kategori', 'nominal', 'keterangan', 'user_input', 'file_bukti']
+                # Ambil data lama (kecuali header)
+                old_data = ws_trx.get_all_values()
+                if len(old_data) > 0:
+                     # Jika baris 1 isinya salah satu header, anggap itu header lama, kita timpa
+                    ws_trx.update_cell(1, 1, 'id') # Pancing update
+                    # Update row 1
+                    for col_num, val in enumerate(headers_trx, 1):
+                        ws_trx.update_cell(1, col_num, val)
+                st.success("Header 'transaksi' berhasil diperbaiki! Silakan Refresh.")
+            except Exception as e:
+                st.error(f"Gagal: {e}")
+    # ========================================
     
     # Init Session
     if 'logged_in' not in st.session_state:
@@ -253,3 +275,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
