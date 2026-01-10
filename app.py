@@ -6,7 +6,7 @@ from fpdf import FPDF
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import uuid
-import random # Library untuk acak arisan
+import random
 
 # --- KONFIGURASI ---
 SCOPE = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
@@ -23,7 +23,7 @@ def connect_db():
         st.error(f"Error Koneksi: {e}")
         return None
 
-# --- FUNGSI CRUD DATABASE ---
+# --- FUNGSI DATABASE (CRUD) ---
 def get_data(worksheet_name):
     sheet = connect_db()
     if sheet:
@@ -49,36 +49,38 @@ def save_all_data(worksheet_name, df):
         ws.clear()
         ws.update(range_name='A1', values=[df.columns.values.tolist()] + df.values.tolist())
 
-# --- LOGIKA ARISAN ---
+# --- FUNGSI KHUSUS ---
+def delete_row_by_id(worksheet_name, id_val):
+    df = get_data(worksheet_name)
+    df = df[df['id'] != str(id_val)]
+    save_all_data(worksheet_name, df)
+
 def kocok_pemenang():
     df = get_data("arisan_peserta")
-    if df.empty:
-        return "Belum ada peserta", None
-
-    # Filter siapa yang belum menang
+    if df.empty: return "Belum ada peserta", None
+    
     kandidat = df[df['status_menang'] == 'Belum']
-
-    # Jika KOSONG (Semua sudah menang), Reset putaran
     reset_msg = ""
+    
+    # Jika semua sudah menang, reset semua
     if kandidat.empty:
-        df['status_menang'] = 'Belum' # Reset lokal
-        save_all_data("arisan_peserta", df) # Simpan reset ke DB
-        kandidat = df # Ambil semua lagi
-        reset_msg = " (Putaran Baru Dimulai!)"
-
-    # Acak 1 Pemenang
+        df['status_menang'] = 'Belum'
+        save_all_data("arisan_peserta", df)
+        kandidat = df 
+        reset_msg = " (Putaran Baru!)"
+    
+    # Acak
     pemenang = kandidat.sample(1).iloc[0]
     nama_pemenang = pemenang['nama_warga']
-    id_pemenang = pemenang['id']
-
-    # Update status pemenang jadi 'Sudah'
-    idx = df[df['id'] == id_pemenang].index[0]
+    
+    # Update status
+    idx = df[df['id'] == pemenang['id']].index[0]
     df.at[idx, 'status_menang'] = 'Sudah'
     save_all_data("arisan_peserta", df)
-
+    
     return f"🎉 {nama_pemenang} {reset_msg}", nama_pemenang
 
-# --- FUNGSI PDF (Lap Kas, Tunggakan, Arisan) ---
+# --- PDF GENERATOR (LENGKAP: KAS, TUNGGAKAN, ARISAN) ---
 class PDF(FPDF):
     def header(self):
         self.set_font('Arial', 'B', 14)
@@ -89,7 +91,7 @@ class PDF(FPDF):
         self.set_font('Arial', 'I', 8)
         self.cell(0, 10, f'Halaman {self.page_no()}', 0, 0, 'C')
 
-def create_pdf_arisan(dataframe, judul):
+def create_pdf_universal(dataframe, judul, headers, cols, widths):
     pdf = PDF()
     pdf.add_page()
     pdf.set_font("Arial", 'B', 12)
@@ -97,25 +99,24 @@ def create_pdf_arisan(dataframe, judul):
     pdf.ln(5)
     pdf.set_font("Arial", size=10)
     
-    # Deteksi Kolom
-    if 'status_menang' in dataframe.columns: # Laporan Peserta
-        headers = ['Nama Peserta', 'Status Menang']
-        cols = ['nama_warga', 'status_menang']
-        w = [100, 50]
-    else: # Laporan Pembayaran
-        headers = ['Nama', 'Periode', 'Nominal', 'Status', 'Tgl Bayar']
-        cols = ['nama_warga', 'periode', 'nominal', 'status_bayar', 'tanggal_bayar']
-        w = [40, 40, 35, 35, 35]
-
-    for i, h in enumerate(headers): pdf.cell(w[i], 10, h, 1, 0, 'C')
+    # Header Tabel
+    for i, h in enumerate(headers): pdf.cell(widths[i], 10, h, 1, 0, 'C')
     pdf.ln()
     
+    # Isi Tabel
+    total = 0
     for _, row in dataframe.iterrows():
         for i, c in enumerate(cols):
             val = str(row[c])
-            if c == 'nominal': val = f"{float(val):,.0f}"
-            pdf.cell(w[i], 8, val, 1)
+            # Format Angka/Rupiah otomatis jika kolom mengandung 'nominal'
+            if 'nominal' in c and val.replace('.','',1).isdigit(): 
+                val_float = float(val)
+                val = f"{val_float:,.0f}"
+                if 'status' not in c: # Summing logic sederhana
+                     total += val_float
+            pdf.cell(widths[i], 8, val, 1)
         pdf.ln()
+        
     return pdf.output(dest='S').encode('latin-1')
 
 # --- HELPERS ---
@@ -124,28 +125,30 @@ def init_default():
     if get_data("users").empty:
         add_row("users", ['admin', hash_pass('admin123'), 'admin', 'Bendahara'])
 
-# --- MAIN APP ---
+# --- MAIN APPLICATION ---
 def main():
     st.set_page_config(page_title="Sistem RT Super App", layout="wide")
     
-    # Sidebar Setup
+    # Sidebar Setup Database (Sekali jalan)
     with st.sidebar:
-        if st.checkbox("⚙️ Setup Database Awal"):
-            if st.button("Buat Header Arisan"):
+        if st.checkbox("⚙️ Setup Database"):
+            if st.button("Buat Semua Header Sheet"):
                 sheet = connect_db()
-                try: 
-                    sheet.add_worksheet("arisan_peserta", 100, 5)
-                    sheet.add_worksheet("arisan_bayar", 100, 6)
-                except: pass
-                
-                # Isi Header
-                ws1 = sheet.worksheet("arisan_peserta")
-                ws1.update(range_name='A1', values=[['id','nama_warga','status_menang']])
-                ws2 = sheet.worksheet("arisan_bayar")
-                ws2.update(range_name='A1', values=[['id','nama_warga','periode','nominal','status_bayar','tanggal_bayar']])
-                st.success("Database Arisan Siap!")
+                try:
+                    # Buat sheet jika belum ada
+                    sheets_needed = ["tunggakan", "arisan_peserta", "arisan_bayar"]
+                    for s in sheets_needed:
+                        try: sheet.add_worksheet(s, 100, 10)
+                        except: pass
+                    
+                    # Isi Header default
+                    sheet.worksheet("tunggakan").update(range_name='A1', values=[['id','nama_warga','periode','nominal','status']])
+                    sheet.worksheet("arisan_peserta").update(range_name='A1', values=[['id','nama_warga','status_menang']])
+                    sheet.worksheet("arisan_bayar").update(range_name='A1', values=[['id','nama_warga','periode','nominal','status_bayar','tanggal_bayar']])
+                    st.success("Database Lengkap Siap!")
+                except Exception as e: st.error(e)
 
-    # Login
+    # LOGIN SYSTEM
     if 'logged_in' not in st.session_state: st.session_state['logged_in'] = False
     if not st.session_state['logged_in']:
         st.title("🔐 Login Sistem RT")
@@ -163,11 +166,10 @@ def main():
                 if st.button("Init Admin"): init_default()
         return
 
-    # Menu
+    # NAVIGASI
     st.sidebar.title(f"Hi, {st.session_state['nama']}")
-    
     menu_admin = ["Dashboard", "Input Kas", "Kelola Arisan", "Kelola Tunggakan", "Kelola Kategori", "User Management", "Laporan Kas"]
-    menu_warga = ["Dashboard", "Riwayat Kas", "Info Arisan", "Laporan Kas"]
+    menu_warga = ["Dashboard", "Riwayat Kas", "Info Arisan", "Info Tunggakan", "Laporan Kas"]
     
     menu = menu_admin if st.session_state['role'] == 'admin' else menu_warga
     choice = st.sidebar.radio("Menu Utama", menu)
@@ -176,126 +178,165 @@ def main():
 
     # --- 1. DASHBOARD ---
     if choice == "Dashboard":
-        st.header("📊 Dashboard Warga")
+        st.header("📊 Dashboard")
+        
+        # Info Kas
         df = get_data("transaksi")
+        saldo = 0
         if not df.empty:
             df['nominal'] = pd.to_numeric(df['nominal'], errors='coerce').fillna(0)
             saldo = df[df['tipe']=='Pemasukan']['nominal'].sum() - df[df['tipe']=='Pengeluaran']['nominal'].sum()
-            st.metric("Saldo Kas RT", f"Rp {saldo:,.0f}")
         
-        # Info Pemenang Arisan Terakhir (Ambil dari yang status 'Sudah' paling bawah/acak kalau belum ada timestamp)
-        df_arisan = get_data("arisan_peserta")
-        if not df_arisan.empty:
-            pemenang = df_arisan[df_arisan['status_menang']=='Sudah']
-            if not pemenang.empty:
-                st.info(f"🏆 Pemenang Arisan Terakhir: {pemenang.iloc[-1]['nama_warga']}")
-            else:
-                st.info("Belum ada pemenang arisan periode ini.")
+        # Info Tunggakan
+        df_t = get_data("tunggakan")
+        tot_tunggak = 0
+        if not df_t.empty:
+            df_t['nominal'] = pd.to_numeric(df_t['nominal'], errors='coerce').fillna(0)
+            tot_tunggak = df_t[df_t['status']=='Belum Lunas']['nominal'].sum()
 
-    # --- 2. KELOLA ARISAN (FITUR UTAMA BARU) ---
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Saldo Kas RT", f"Rp {saldo:,.0f}")
+        c2.metric("Total Tunggakan Warga", f"Rp {tot_tunggak:,.0f}", delta_color="inverse")
+        
+        # Info Arisan
+        df_a = get_data("arisan_peserta")
+        if not df_a.empty:
+            menang = df_a[df_a['status_menang']=='Sudah']
+            last_win = menang.iloc[-1]['nama_warga'] if not menang.empty else "-"
+            c3.metric("Pemenang Arisan Terakhir", last_win)
+
+    # --- 2. KELOLA TUNGGAKAN (FITUR YANG SEMPAT HILANG - KEMBALI LENGKAP) ---
+    elif choice == "Kelola Tunggakan" or choice == "Info Tunggakan":
+        st.header("❗ Manajemen Tunggakan")
+        
+        # Warga hanya bisa melihat (Read Only)
+        if st.session_state['role'] != 'admin':
+            st.warning("Halaman ini berisi daftar kewajiban warga yang belum lunas.")
+            df_t = get_data("tunggakan")
+            if not df_t.empty:
+                st.dataframe(df_t[df_t['status']=='Belum Lunas'])
+            else:
+                st.info("Tidak ada tunggakan.")
+        
+        # Admin Full Access
+        else:
+            tab1, tab2, tab3 = st.tabs(["➕ Tambah Data", "📝 Daftar & Update", "🖨️ Laporan PDF"])
+            
+            # Tab 1: Tambah
+            with tab1:
+                with st.form("tambah_tunggakan"):
+                    col_a, col_b = st.columns(2)
+                    nama = col_a.text_input("Nama Warga")
+                    periode = col_b.text_input("Periode (Misal: Iuran Jan 2026)")
+                    nominal = st.number_input("Nominal (Rp)", step=5000)
+                    status = st.selectbox("Status Awal", ["Belum Lunas", "Lunas"])
+                    
+                    if st.form_submit_button("Simpan Tagihan"):
+                        if nama:
+                            add_row("tunggakan", [str(uuid.uuid4())[:8], nama, periode, nominal, status])
+                            st.success("Tersimpan!")
+                        else: st.error("Nama wajib diisi")
+
+            # Tab 2: Edit/Delete
+            with tab2:
+                df_t = get_data("tunggakan")
+                if not df_t.empty:
+                    st.info("Edit langsung di tabel untuk ubah Status, lalu klik Simpan.")
+                    edited = st.data_editor(
+                        df_t, 
+                        column_config={
+                            "id": st.column_config.TextColumn(disabled=True),
+                            "status": st.column_config.SelectboxColumn("Status", options=["Belum Lunas", "Lunas"], required=True)
+                        },
+                        hide_index=True, num_rows="dynamic"
+                    )
+                    
+                    c_btn1, c_btn2 = st.columns(2)
+                    if c_btn1.button("💾 Simpan Perubahan Status"):
+                        save_all_data("tunggakan", edited)
+                        st.success("Database Updated!")
+                        st.rerun()
+                    
+                    with c_btn2:
+                        with st.expander("Hapus Data"):
+                            id_del = st.text_input("ID untuk dihapus")
+                            if st.button("Hapus Permanen"):
+                                delete_row_by_id("tunggakan", id_del)
+                                st.success("Dihapus")
+                                st.rerun()
+                else: st.info("Data kosong")
+
+            # Tab 3: Laporan
+            with tab3:
+                df_t = get_data("tunggakan")
+                if not df_t.empty:
+                    filter_s = st.selectbox("Filter", ["Semua", "Belum Lunas", "Lunas"])
+                    if filter_s != "Semua":
+                        df_t = df_t[df_t['status'] == filter_s]
+                    
+                    st.dataframe(df_t)
+                    if st.button("Download PDF Tunggakan"):
+                        pdf = create_pdf_universal(
+                            df_t, 
+                            "Laporan Tunggakan Warga",
+                            ['Nama', 'Periode', 'Nominal', 'Status'],
+                            ['nama_warga', 'periode', 'nominal', 'status'],
+                            [50, 50, 40, 40]
+                        )
+                        st.download_button("Download PDF", pdf, "tunggakan.pdf")
+
+    # --- 3. KELOLA ARISAN ---
     elif choice == "Kelola Arisan" or choice == "Info Arisan":
         st.header("🎲 Manajemen Arisan")
-        
         tab1, tab2, tab3 = st.tabs(["👥 Peserta & Kocokan", "💰 Pembayaran", "📄 Laporan"])
         
-        # TAB 1: PESERTA & KOCOKAN
+        # Tab 1: Kocokan
         with tab1:
             if st.session_state['role'] == 'admin':
-                with st.expander("➕ Tambah Peserta Baru"):
-                    with st.form("add_peserta"):
-                        nm = st.text_input("Nama Warga")
-                        if st.form_submit_button("Simpan Peserta"):
+                with st.expander("Tambah Peserta"):
+                    with st.form("add_p"):
+                        nm = st.text_input("Nama")
+                        if st.form_submit_button("Simpan"):
                             add_row("arisan_peserta", [str(uuid.uuid4())[:8], nm, 'Belum'])
-                            st.success("Peserta ditambahkan")
-                            st.rerun()
-
-            col_kocok, col_list = st.columns([1, 2])
-            
-            with col_kocok:
-                st.subheader("Kocokan")
-                if st.session_state['role'] == 'admin':
-                    if st.button("🎲 KOCOK ARISAN SEKARANG", type="primary"):
-                        msg, win = kocok_pemenang()
-                        if win:
-                            st.balloons()
-                            st.success(f"PEMENANG: {win}")
-                        else:
-                            st.warning(msg)
-                else:
-                    st.write("Hanya Admin yang bisa mengocok arisan.")
-            
-            with col_list:
-                st.subheader("Daftar Peserta")
-                df_p = get_data("arisan_peserta")
-                st.dataframe(df_p, use_container_width=True)
+                            st.success("Oke"); st.rerun()
                 
-                # Fitur Reset Manual (Admin)
-                if st.session_state['role'] == 'admin' and not df_p.empty:
-                    if st.button("🔄 Reset Manual Semua Status ke 'Belum'"):
-                        df_p['status_menang'] = 'Belum'
-                        save_all_data("arisan_peserta", df_p)
-                        st.success("Status direset!")
-                        st.rerun()
+                if st.button("🎲 KOCOK ARISAN", type="primary"):
+                    msg, win = kocok_pemenang()
+                    if win: 
+                        st.balloons()
+                        st.success(f"PEMENANG: {win}")
+                    else: st.warning(msg)
+            
+            st.dataframe(get_data("arisan_peserta"), use_container_width=True)
 
-        # TAB 2: PEMBAYARAN BULANAN
+        # Tab 2: Pembayaran
         with tab2:
-            st.subheader("Pembayaran Arisan")
-            
             if st.session_state['role'] == 'admin':
-                # Form Input Pembayaran
-                with st.form("bayar_arisan"):
-                    c1, c2, c3 = st.columns(3)
-                    df_peserta = get_data("arisan_peserta")
-                    opts = df_peserta['nama_warga'].tolist() if not df_peserta.empty else []
-                    
-                    nama_byr = c1.selectbox("Nama Warga", opts)
-                    periode_byr = c2.text_input("Periode (Cth: Jan 2026)")
-                    nom_byr = c3.number_input("Nominal", step=10000)
-                    
-                    if st.form_submit_button("Catat Pembayaran"):
-                        add_row("arisan_bayar", [str(uuid.uuid4())[:8], nama_byr, periode_byr, nom_byr, 'Lunas', str(datetime.now().date())])
-                        st.success("Pembayaran dicatat!")
-                        st.rerun()
-            
-            # Tabel Pembayaran
-            df_b = get_data("arisan_bayar")
-            if not df_b.empty:
-                st.dataframe(df_b, use_container_width=True)
-                # Fitur Delete (Admin)
-                if st.session_state['role'] == 'admin':
-                     with st.expander("Hapus Data Pembayaran"):
-                         id_hapus = st.text_input("Masukkan ID untuk dihapus")
-                         if st.button("Hapus Data Bayar"):
-                             df_new = df_b[df_b['id'] != id_hapus]
-                             save_all_data("arisan_bayar", df_new)
-                             st.success("Dihapus")
-                             st.rerun()
-            else:
-                st.info("Belum ada data pembayaran.")
+                with st.form("bayar_ar"):
+                    df_p = get_data("arisan_peserta")
+                    nama = st.selectbox("Nama", df_p['nama_warga'].tolist() if not df_p.empty else [])
+                    per = st.text_input("Periode (Cth: Feb 2026)")
+                    nom = st.number_input("Nominal", step=10000)
+                    if st.form_submit_button("Bayar"):
+                        add_row("arisan_bayar", [str(uuid.uuid4())[:8], nama, per, nom, 'Lunas', str(datetime.now().date())])
+                        st.success("Tercatat!"); st.rerun()
+            st.dataframe(get_data("arisan_bayar"))
 
-        # TAB 3: LAPORAN
+        # Tab 3: Laporan Arisan
         with tab3:
-            st.subheader("Laporan Arisan")
-            col_L1, col_L2 = st.columns(2)
-            
-            with col_L1:
-                st.write("**Laporan Status Pemenang**")
-                df_peserta = get_data("arisan_peserta")
-                if st.button("Download PDF Status Peserta"):
-                    pdf = create_pdf_arisan(df_peserta, "Laporan Status Arisan")
-                    st.download_button("Unduh PDF", pdf, "status_arisan.pdf")
-            
-            with col_L2:
-                st.write("**Laporan Pembayaran**")
-                df_bayar = get_data("arisan_bayar")
-                if st.button("Download PDF Pembayaran"):
-                    pdf = create_pdf_arisan(df_bayar, "Laporan Pembayaran Arisan")
-                    st.download_button("Unduh PDF", pdf, "pembayaran_arisan.pdf")
+            df_ab = get_data("arisan_bayar")
+            if not df_ab.empty and st.button("PDF Pembayaran Arisan"):
+                pdf = create_pdf_universal(
+                    df_ab, "Laporan Pembayaran Arisan",
+                    ['Nama', 'Periode', 'Nominal', 'Tgl Bayar'],
+                    ['nama_warga', 'periode', 'nominal', 'tanggal_bayar'],
+                    [50, 40, 40, 40]
+                )
+                st.download_button("Download PDF", pdf, "arisan_bayar.pdf")
 
-    # --- 3. INPUT KAS (Admin Only) ---
+    # --- 4. INPUT KAS (Admin Only) ---
     elif choice == "Input Kas":
         st.header("📝 Input Kas RT")
-        # (Kode sama seperti sebelumnya...)
         jenis = st.radio("Tipe", ["Pemasukan","Pengeluaran"], horizontal=True)
         df_k = get_data("kategori")
         cats = df_k[df_k['jenis']==jenis]['nama'].tolist() if not df_k.empty else ["Umum"]
@@ -308,25 +349,15 @@ def main():
                 add_row("transaksi", [str(uuid.uuid4())[:8], str(tgl), jenis, kat, nom, ket, st.session_state['username'], "-"])
                 st.success("Tersimpan!")
 
-    # --- 4. KELOLA TUNGGAKAN (Sama seperti sebelumnya) ---
-    elif choice == "Kelola Tunggakan":
-        st.header("❗ Kelola Tunggakan Iuran Warga")
-        # (Copy logika tunggakan yang sebelumnya di sini atau gunakan kode lengkap di atas yang sudah saya gabung)
-        # Sederhananya menampilkan tabel tunggakan
-        df_t = get_data("tunggakan")
-        if not df_t.empty:
-            edited = st.data_editor(df_t, key="edit_tunggakan", num_rows="dynamic")
-            if st.button("Simpan Perubahan Tunggakan"):
-                save_all_data("tunggakan", edited)
-                st.success("Updated!")
-        else:
-            st.info("Tidak ada tunggakan.")
-
-    # --- FITUR LAINNYA ---
+    # --- 5. MENU LAINNYA ---
     elif choice == "Laporan Kas":
-        # (Fitur laporan lama)
-        st.dataframe(get_data("transaksi"))
-    
+        st.header("Laporan Kas")
+        df = get_data("transaksi")
+        st.dataframe(df)
+        if not df.empty and st.button("Download PDF Kas"):
+             pdf = create_pdf_universal(df, "Laporan Kas RT", ['Tgl', 'Tipe', 'Kat', 'Nominal'], ['tanggal', 'tipe', 'kategori', 'nominal'], [30, 30, 40, 40])
+             st.download_button("Download", pdf, "kas.pdf")
+
     elif choice == "User Management":
         st.header("👥 User Management")
         with st.form("u"):
