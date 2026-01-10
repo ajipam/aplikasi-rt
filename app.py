@@ -104,19 +104,14 @@ def create_pdf_universal(dataframe, judul, headers, cols, widths):
     for _, row in dataframe.iterrows():
         for i, c in enumerate(cols):
             val = str(row[c])
-            # Format Rupiah
             if 'nominal' in c and val.replace('.','',1).isdigit(): 
                 val_float = float(val)
                 val = f"{val_float:,.0f}"
                 has_nominal = True
-                
-                # Logic Saldo sederhana (Kas)
                 if 'tipe' in dataframe.columns:
                     if row['tipe'] == 'Pemasukan': total += val_float
                     else: total -= val_float
-                else:
-                    total += val_float # Default sum
-                    
+                else: total += val_float
             pdf.cell(widths[i], 8, val, 1)
         pdf.ln()
     
@@ -125,27 +120,21 @@ def create_pdf_universal(dataframe, judul, headers, cols, widths):
         pdf.set_font("Arial", 'B', 10)
         label_total = "Sisa Saldo" if 'tipe' in dataframe.columns else "Total"
         pdf.cell(0, 8, f"{label_total}: Rp {total:,.0f}", 0, 1)
-        
     return pdf.output(dest='S').encode('latin-1')
 
 # --- HELPERS ---
 def hash_pass(p): return hashlib.sha256(p.encode()).hexdigest()
 
 def get_month_map():
-    return {
-        "Januari": 1, "Februari": 2, "Maret": 3, "April": 4, "Mei": 5, "Juni": 6,
-        "Juli": 7, "Agustus": 8, "September": 9, "Oktober": 10, "November": 11, "Desember": 12
-    }
+    return {"Januari": 1, "Februari": 2, "Maret": 3, "April": 4, "Mei": 5, "Juni": 6, "Juli": 7, "Agustus": 8, "September": 9, "Oktober": 10, "November": 11, "Desember": 12}
 
 def filter_by_date(df, col_name, month_name, year):
-    """Filter DataFrame berdasarkan bulan dan tahun"""
     if df.empty: return df
     try:
         df[col_name] = pd.to_datetime(df[col_name])
         month_idx = get_month_map()[month_name]
         return df[(df[col_name].dt.month == month_idx) & (df[col_name].dt.year == year)]
-    except:
-        return df
+    except: return df
 
 def init_default():
     if get_data("users").empty:
@@ -155,18 +144,20 @@ def init_default():
 def main():
     st.set_page_config(page_title="Sistem RT Final", layout="wide")
     
-    # Setup Sidebar
+    # Sidebar
     with st.sidebar:
         if st.checkbox("⚙️ Setup DB"):
             if st.button("Buat Header"):
                 sheet = connect_db()
                 try:
-                    for s in ["tunggakan", "arisan_peserta", "arisan_bayar"]: 
+                    for s in ["tunggakan", "arisan_peserta", "arisan_bayar", "kategori"]: 
                         try: sheet.add_worksheet(s, 100, 10) 
                         except: pass
+                    # Setup Header Default
                     sheet.worksheet("tunggakan").update(range_name='A1', values=[['id','nama_warga','periode','nominal','status']])
                     sheet.worksheet("arisan_peserta").update(range_name='A1', values=[['id','nama_warga','status_menang']])
                     sheet.worksheet("arisan_bayar").update(range_name='A1', values=[['id','nama_warga','periode','nominal','status_bayar','tanggal_bayar']])
+                    sheet.worksheet("kategori").update(range_name='A1', values=[['id','nama','jenis']])
                     st.success("Siap!")
                 except: pass
 
@@ -190,8 +181,10 @@ def main():
 
     # Menu
     st.sidebar.title(f"Hi, {st.session_state['nama']}")
-    menu_admin = ["Dashboard", "Input Kas", "Kelola Arisan", "Kelola Tunggakan", "User Management", "Laporan Kas"]
+    # Menu yang benar: Menambahkan 'Kelola Kategori'
+    menu_admin = ["Dashboard", "Input Kas", "Kelola Arisan", "Kelola Tunggakan", "Kelola Kategori", "User Management", "Laporan Kas"]
     menu_warga = ["Dashboard", "Riwayat Kas", "Info Arisan", "Info Tunggakan", "Laporan Kas"]
+    
     menu = menu_admin if st.session_state['role'] == 'admin' else menu_warga
     choice = st.sidebar.radio("Menu Utama", menu)
     
@@ -225,62 +218,46 @@ def main():
     # --- 2. KELOLA TUNGGAKAN ---
     elif choice == "Kelola Tunggakan" or choice == "Info Tunggakan":
         st.header("❗ Manajemen Tunggakan")
-        tab1, tab2, tab3 = st.tabs(["Daftar & Edit", "Tambah Data (Admin)", "Laporan PDF"])
+        tab1, tab2, tab3 = st.tabs(["Daftar & Edit", "Tambah Data", "Laporan PDF"])
         
-        with tab1:
+        with tab1: # Edit Status
             df_t = get_data("tunggakan")
             if not df_t.empty:
                 if st.session_state['role'] == 'admin':
                     edited = st.data_editor(df_t, column_config={"id": st.column_config.TextColumn(disabled=True), "status": st.column_config.SelectboxColumn(options=["Belum Lunas", "Lunas"])}, hide_index=True)
                     if st.button("Simpan Perubahan"): save_all_data("tunggakan", edited); st.success("Disimpan!"); st.rerun()
-                    
                     with st.expander("Hapus Data"):
-                        id_del = st.text_input("ID Hapus")
-                        if st.button("Hapus"): delete_row_by_id("tunggakan", id_del); st.rerun()
-                else:
-                    st.dataframe(df_t[df_t['status']=='Belum Lunas'])
+                         if st.button("Hapus ID Terpilih (Ketik ID di kolom)"): pass # Placeholder, use text input below
+                         id_del = st.text_input("Masukkan ID untuk Hapus")
+                         if st.button("Hapus Permanen"): delete_row_by_id("tunggakan", id_del); st.rerun()
+                else: st.dataframe(df_t[df_t['status']=='Belum Lunas'])
             else: st.info("Kosong")
 
-        with tab2:
+        with tab2: # Tambah Data
             if st.session_state['role'] == 'admin':
                 with st.form("add_t"):
-                    n = st.text_input("Nama"); p = st.text_input("Periode (Cth: Jan 2026)"); nom = st.number_input("Nominal", step=5000)
+                    n = st.text_input("Nama"); p = st.text_input("Periode"); nom = st.number_input("Nominal", step=5000)
                     s = st.selectbox("Status", ["Belum Lunas", "Lunas"])
                     if st.form_submit_button("Simpan"):
-                        add_row("tunggakan", [str(uuid.uuid4())[:8], n, p, nom, s])
-                        st.success("Ok")
+                        add_row("tunggakan", [str(uuid.uuid4())[:8], n, p, nom, s]); st.success("Ok")
             else: st.warning("Akses Admin")
 
-        with tab3:
-            st.subheader("Cetak Laporan Tunggakan")
-            # Filter Tunggakan berdasarkan String Periode (Karena bukan format tanggal murni)
+        with tab3: # Laporan
             df_t = get_data("tunggakan")
-            filter_text = st.text_input("Cari Periode (Contoh: Jan 2026)", "")
-            
+            ft = st.text_input("Cari Periode (Cth: Jan 2026)")
             if not df_t.empty:
-                df_print = df_t.copy()
-                if filter_text:
-                    # Filter teks case-insensitive
-                    df_print = df_print[df_print['periode'].str.contains(filter_text, case=False, na=False)]
-                
-                st.dataframe(df_print)
-                
+                if ft: df_t = df_t[df_t['periode'].str.contains(ft, case=False, na=False)]
+                st.dataframe(df_t)
                 if st.button("Download PDF Tunggakan"):
-                    title = f"Laporan Tunggakan ({filter_text})" if filter_text else "Laporan Semua Tunggakan"
-                    pdf = create_pdf_universal(
-                        df_print, title,
-                        ['Nama', 'Periode', 'Nominal', 'Status'],
-                        ['nama_warga', 'periode', 'nominal', 'status'],
-                        [50, 50, 40, 40]
-                    )
-                    st.download_button("Download PDF", pdf, "tunggakan.pdf")
+                    pdf = create_pdf_universal(df_t, f"Laporan Tunggakan ({ft})", ['Nama', 'Periode', 'Nominal', 'Status'], ['nama_warga', 'periode', 'nominal', 'status'], [50, 50, 40, 40])
+                    st.download_button("Download", pdf, "tunggakan.pdf")
 
     # --- 3. KELOLA ARISAN ---
     elif choice == "Kelola Arisan" or choice == "Info Arisan":
         st.header("🎲 Manajemen Arisan")
         tab1, tab2, tab3 = st.tabs(["Peserta & Kocokan", "Pembayaran", "Laporan PDF"])
         
-        with tab1: # Kocokan
+        with tab1:
             if st.session_state['role']=='admin':
                 if st.button("🎲 KOCOK ARISAN"):
                     msg, win = kocok_pemenang()
@@ -291,49 +268,38 @@ def main():
                     if st.button("Simpan Peserta"): add_row("arisan_peserta", [str(uuid.uuid4())[:8], nm, 'Belum']); st.rerun()
             st.dataframe(get_data("arisan_peserta"), use_container_width=True)
 
-        with tab2: # Bayar
+        with tab2:
             if st.session_state['role']=='admin':
                 with st.form("bayar_ar"):
                     df_p = get_data("arisan_peserta")
                     n = st.selectbox("Nama", df_p['nama_warga'].tolist() if not df_p.empty else [])
-                    p = st.text_input("Periode (Cth: Jan 2026)"); nom = st.number_input("Nominal", step=10000)
+                    p = st.text_input("Periode"); nom = st.number_input("Nominal", step=10000)
                     if st.form_submit_button("Bayar"):
                         add_row("arisan_bayar", [str(uuid.uuid4())[:8], n, p, nom, 'Lunas', str(datetime.now().date())])
                         st.success("Ok"); st.rerun()
             st.dataframe(get_data("arisan_bayar"))
 
-        with tab3: # Laporan
-            st.subheader("Cetak Laporan Pembayaran Arisan")
-            
-            # === FILTER BULAN & TAHUN ===
+        with tab3:
             c_m, c_y = st.columns(2)
-            sel_month = c_m.selectbox("Pilih Bulan", list(get_month_map().keys()))
-            sel_year = c_y.number_input("Pilih Tahun", min_value=2020, max_value=2030, value=datetime.now().year)
-            
-            df_ab = get_data("arisan_bayar")
-            if not df_ab.empty:
-                # Filter Data
-                df_ab_filtered = filter_by_date(df_ab, 'tanggal_bayar', sel_month, sel_year)
-                
-                st.write(f"Menampilkan data: {sel_month} {sel_year}")
-                st.dataframe(df_ab_filtered)
-                
-                if not df_ab_filtered.empty and st.button("Download Laporan Arisan"):
-                    pdf = create_pdf_universal(
-                        df_ab_filtered, f"Laporan Arisan - {sel_month} {sel_year}",
-                        ['Nama', 'Periode', 'Nominal', 'Tgl Bayar'],
-                        ['nama_warga', 'periode', 'nominal', 'tanggal_bayar'],
-                        [50, 40, 40, 40]
-                    )
-                    st.download_button("Download PDF", pdf, f"arisan_{sel_month}_{sel_year}.pdf")
-            else:
-                st.info("Data pembayaran kosong.")
+            sel_month = c_m.selectbox("Bulan", list(get_month_map().keys()))
+            sel_year = c_y.number_input("Tahun", min_value=2020, value=datetime.now().year)
+            df_ab = filter_by_date(get_data("arisan_bayar"), 'tanggal_bayar', sel_month, sel_year)
+            st.dataframe(df_ab)
+            if not df_ab.empty and st.button("Download PDF Arisan"):
+                pdf = create_pdf_universal(df_ab, f"Arisan {sel_month} {sel_year}", ['Nama', 'Periode', 'Nominal', 'Tgl'], ['nama_warga', 'periode', 'nominal', 'tanggal_bayar'], [50, 40, 40, 40])
+                st.download_button("Download", pdf, "arisan.pdf")
 
     # --- 4. INPUT KAS ---
     elif choice == "Input Kas":
         st.header("📝 Input Kas")
         jenis = st.radio("Tipe", ["Pemasukan","Pengeluaran"], horizontal=True)
-        cats = ["Iuran", "Sumbangan", "Lainnya"] # Bisa ambil DB jika mau
+        # Ambil Kategori dari DB
+        df_k = get_data("kategori")
+        cats = ["Umum"]
+        if not df_k.empty:
+             cats = df_k[df_k['jenis'] == jenis]['nama'].tolist()
+             if not cats: cats = ["Lainnya"]
+             
         with st.form("trx"):
             tgl = st.date_input("Tanggal", datetime.now())
             nom = st.number_input("Nominal", step=1000)
@@ -343,37 +309,35 @@ def main():
                 add_row("transaksi", [str(uuid.uuid4())[:8], str(tgl), jenis, kat, nom, ket, st.session_state['username'], "-"])
                 st.success("Ok")
 
-    # --- 5. LAPORAN KAS ---
-    elif choice == "Laporan Kas":
-        st.header("🖨️ Laporan Kas Bulanan")
-        
-        # === FILTER BULAN & TAHUN ===
-        c_m, c_y = st.columns(2)
-        sel_month = c_m.selectbox("Pilih Bulan", list(get_month_map().keys()), key="kas_m")
-        sel_year = c_y.number_input("Pilih Tahun", min_value=2020, max_value=2030, value=datetime.now().year, key="kas_y")
-        
-        df = get_data("transaksi")
-        if not df.empty:
-            df_filtered = filter_by_date(df, 'tanggal', sel_month, sel_year)
-            
-            st.dataframe(df_filtered)
-            
-            if not df_filtered.empty:
-                c1, c2 = st.columns(2)
-                with c1:
-                    if st.button("Download PDF Kas"):
-                        pdf = create_pdf_universal(
-                            df_filtered, f"Laporan Kas - {sel_month} {sel_year}",
-                            ['Tgl', 'Tipe', 'Kat', 'Nominal'], 
-                            ['tanggal', 'tipe', 'kategori', 'nominal'], 
-                            [30, 30, 40, 40]
-                        )
-                        st.download_button("Download PDF", pdf, f"kas_{sel_month}.pdf")
-                with c2:
-                    csv = df_filtered.to_csv(index=False).encode('utf-8')
-                    st.download_button("Download Excel/CSV", csv, "kas.csv")
+    # --- 5. KELOLA KATEGORI (SUDAH KEMBALI) ---
+    elif choice == "Kelola Kategori":
+        st.header("🏷️ Kelola Kategori")
+        df_k = get_data("kategori")
+        if not df_k.empty:
+            edited = st.data_editor(df_k, num_rows="dynamic", hide_index=True)
+            if st.button("Simpan Kategori"):
+                save_all_data("kategori", edited)
+                st.success("Tersimpan!")
+                st.rerun()
         else:
-            st.info("Belum ada data transaksi.")
+            st.info("Kategori kosong. Silakan tambah baris.")
+            # Tombol inisialisasi jika kosong sama sekali
+            if st.button("Buat Kategori Default"):
+                add_row("kategori", ["1", "Iuran Warga", "Pemasukan"])
+                add_row("kategori", ["2", "Kebersihan", "Pengeluaran"])
+                st.rerun()
+
+    # --- 6. USER & LAPORAN ---
+    elif choice == "Laporan Kas":
+        st.header("🖨️ Laporan Kas")
+        c_m, c_y = st.columns(2)
+        sel_month = c_m.selectbox("Bulan", list(get_month_map().keys()), key="kas_m")
+        sel_year = c_y.number_input("Tahun", min_value=2020, value=datetime.now().year, key="kas_y")
+        df = filter_by_date(get_data("transaksi"), 'tanggal', sel_month, sel_year)
+        st.dataframe(df)
+        if not df.empty and st.button("Download PDF Kas"):
+             pdf = create_pdf_universal(df, f"Kas {sel_month} {sel_year}", ['Tgl', 'Tipe', 'Kat', 'Nominal'], ['tanggal', 'tipe', 'kategori', 'nominal'], [30, 30, 40, 40])
+             st.download_button("Download", pdf, "kas.pdf")
 
     elif choice == "User Management":
         with st.form("u"):
