@@ -1,13 +1,12 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, date
 import hashlib
 from fpdf import FPDF
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import uuid
 import random
-from fpdf import FPDF
 import io
 
 # --- KONFIGURASI ---
@@ -77,7 +76,7 @@ def kocok_pemenang():
     
     return f"🎉 {pemenang['nama_warga']} {reset_msg}", pemenang['nama_warga']
 
-# --- PDF GENERATOR ---
+# --- PDF GENERATOR (LAPORAN BIASA) ---
 class PDF(FPDF):
     def header(self):
         self.set_font('Arial', 'B', 14)
@@ -123,6 +122,83 @@ def create_pdf_universal(dataframe, judul, headers, cols, widths):
         pdf.cell(0, 8, f"{label_total}: Rp {total:,.0f}", 0, 1)
     return pdf.output(dest='S').encode('latin-1')
 
+# --- PDF GENERATOR (KHUSUS KWITANSI) ---
+class KwitansiPDF(FPDF):
+    def header(self):
+        pass # Tidak ada header global
+    def footer(self):
+        pass # Tidak ada footer global
+    
+    def buat_kwitansi(self, data, bulan, tahun, y_position):
+        self.set_xy(10, y_position)
+        self.rect(10, y_position, 195, 55) # Border Luar
+        self.line(40, y_position, 40, y_position + 55) # Garis Vertikal
+        
+        # Header Kiri
+        self.set_font("Arial", "B", 12)
+        self.set_xy(10, y_position + 15)
+        self.multi_cell(30, 6, "RT.06 - RW.X\nPONDOK BERINGIN\nSEMARANG", align='C')
+
+        # Isi Kanan
+        start_x = 42
+        
+        # Baris 1: No Urut RT
+        self.set_font("Arial", "", 10)
+        self.set_xy(start_x, y_position + 5)
+        self.cell(20, 5, "Kwitansi", 0, 0)
+        self.set_xy(start_x + 90, y_position + 5)
+        self.cell(25, 5, "No. urut RT :", 0, 0)
+        box_x = start_x + 115
+        for i in range(5):
+            self.rect(box_x + (i*6), y_position + 4, 6, 6)
+
+        # Baris 2: Telah terima dari
+        self.set_xy(start_x, y_position + 14)
+        self.cell(35, 6, "Telah terima dari", 0, 0)
+        self.cell(5, 6, ":", 0, 0)
+        self.set_font("Arial", "B", 10)
+        self.cell(100, 6, data['nama'], 0, 1)
+
+        # Baris 3: Uang Sejumlah
+        self.set_font("Arial", "", 10)
+        self.set_xy(start_x, y_position + 22)
+        self.cell(35, 6, "Uang sejumlah", 0, 0)
+        self.cell(5, 6, ":", 0, 0)
+        self.rect(start_x + 40, y_position + 22, 110, 6) # Kotak Terbilang
+        kalimat_terbilang = terbilang(data['nominal']) + " Rupiah"
+        self.set_xy(start_x + 42, y_position + 22)
+        self.set_font("Arial", "I", 10)
+        self.cell(105, 6, kalimat_terbilang, 0, 0)
+
+        # Baris 4: Untuk membayar
+        self.set_font("Arial", "", 10)
+        self.set_xy(start_x, y_position + 30)
+        self.cell(35, 6, "Untuk membayar", 0, 0)
+        self.cell(5, 6, ":", 0, 0)
+        self.set_font("Arial", "B", 10)
+        self.cell(100, 6, f"Iuran RT / RW   Bulan : {bulan} {tahun}", 0, 0)
+
+        # Footer: Angka & TTD
+        self.set_xy(start_x + 40, y_position + 42)
+        self.rect(start_x + 40, y_position + 41, 45, 8)
+        self.set_font("Arial", "B", 12)
+        formatted_money = "Rp. {:,.0f},-".format(data['nominal']).replace(",", ".")
+        self.cell(45, 6, formatted_money, 0, 0, 'L')
+        
+        self.set_font("Arial", "", 10)
+        self.set_xy(start_x, y_position + 42)
+        self.cell(35, 6, "Terbilang", 0, 0)
+        self.cell(5, 6, ":", 0, 0)
+
+        self.set_font("Arial", "", 9)
+        self.set_xy(start_x + 100, y_position + 36)
+        self.cell(50, 5, f"Semarang, 01 {bulan} {tahun}", 0, 1, 'C')
+        self.set_xy(start_x + 100, y_position + 40)
+        self.cell(50, 4, "Bendahara RT. 06 RW.X Pondok Beringin Semarang", 0, 1, 'C')
+        self.set_font("Arial", "B", 10)
+        self.set_xy(start_x + 100, y_position + 49)
+        self.cell(50, 5, "AJI PAMUNGKAS", 0, 0, 'C')
+
 # --- HELPERS ---
 def hash_pass(p): return hashlib.sha256(p.encode()).hexdigest()
 
@@ -136,6 +212,26 @@ def filter_by_date(df, col_name, month_name, year):
         month_idx = get_month_map()[month_name]
         return df[(df[col_name].dt.month == month_idx) & (df[col_name].dt.year == year)]
     except: return df
+
+def terbilang(n):
+    angka = ["", "Satu", "Dua", "Tiga", "Empat", "Lima", "Enam", "Tujuh", "Delapan", "Sembilan", "Sepuluh", "Sebelas"]
+    hasil = ""
+    n = int(n)
+    if n >= 0 and n <= 11:
+        hasil = angka[n]
+    elif n < 20:
+        hasil = terbilang(n - 10) + " Belas"
+    elif n < 100:
+        hasil = terbilang(n / 10) + " Puluh " + terbilang(n % 10)
+    elif n < 200:
+        hasil = "Seratus " + terbilang(n - 100)
+    elif n < 1000:
+        hasil = terbilang(n / 100) + " Ratus " + terbilang(n % 100)
+    elif n < 2000:
+        hasil = "Seribu " + terbilang(n - 1000)
+    elif n < 1000000:
+        hasil = terbilang(n / 1000) + " Ribu " + terbilang(n % 1000)
+    return hasil.strip()
 
 def init_default():
     if get_data("users").empty:
@@ -179,10 +275,11 @@ def main():
                 if st.button("Init Admin"): init_default()
         return
 
-    # MENU (Diperbarui: Menambahkan 'Riwayat Kas' yang eksplisit)
+    # MENU UTAMA
     st.sidebar.title(f"Hi, {st.session_state['nama']}")
     
-    menu_admin = ["Dashboard", "Input Kas", "Riwayat Kas", "Kelola Arisan", "Kelola Tunggakan", "Kelola Kategori", "User Management", "Laporan Kas"]
+    # MENU ADMIN UPDATE: Menambahkan 'Cetak Kwitansi'
+    menu_admin = ["Dashboard", "Input Kas", "Riwayat Kas", "Kelola Arisan", "Kelola Tunggakan", "Cetak Kwitansi", "Kelola Kategori", "User Management", "Laporan Kas"]
     menu_warga = ["Dashboard", "Riwayat Kas", "Info Arisan", "Info Tunggakan", "Laporan Kas"]
     
     menu = menu_admin if st.session_state['role'] == 'admin' else menu_warga
@@ -190,20 +287,18 @@ def main():
     
     if st.sidebar.button("Keluar"): st.session_state.clear(); st.rerun()
 
-    # --- 1. DASHBOARD (DIREVISI SESUAI PERMINTAAN) ---
+    # --- 1. DASHBOARD ---
     if choice == "Dashboard":
         st.header("📊 Dashboard Keuangan RT")
         
         df = get_data("transaksi")
         df_t = get_data("tunggakan")
         
-        # Variabel Default
         saldo = 0
         pemasukan_total = 0
         pengeluaran_total = 0
         tunggakan_total = 0
         
-        # Hitung Transaksi Kas
         if not df.empty:
             df['nominal'] = pd.to_numeric(df['nominal'], errors='coerce').fillna(0)
             df['tanggal'] = pd.to_datetime(df['tanggal'])
@@ -212,12 +307,10 @@ def main():
             pengeluaran_total = df[df['tipe']=='Pengeluaran']['nominal'].sum()
             saldo = pemasukan_total - pengeluaran_total
         
-        # Hitung Tunggakan
         if not df_t.empty:
             df_t['nominal'] = pd.to_numeric(df_t['nominal'], errors='coerce').fillna(0)
             tunggakan_total = df_t[df_t['status']=='Belum Lunas']['nominal'].sum()
 
-        # TAMPILAN 4 METRIK UTAMA
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("💰 Saldo Kas Saat Ini", f"Rp {saldo:,.0f}")
         c2.metric("📈 Total Pemasukan", f"Rp {pemasukan_total:,.0f}")
@@ -225,36 +318,24 @@ def main():
         c4.metric("❗ Total Tunggakan", f"Rp {tunggakan_total:,.0f}", delta_color="inverse")
         
         st.divider()
-        
-        # TAMPILAN GRAFIK TAHUN BERJALAN
         st.subheader(f"Grafik Keuangan Tahun {datetime.now().year}")
         if not df.empty:
             df_year = df[df['tanggal'].dt.year == datetime.now().year]
             if not df_year.empty:
                 df_year['bulan'] = df_year['tanggal'].dt.strftime('%Y-%m')
                 chart_data = df_year.groupby(['bulan', 'tipe'])['nominal'].sum().unstack().fillna(0)
-                
-                # Paksa agar kolom Pemasukan & Pengeluaran selalu ada (Anti Error Warna)
                 if 'Pemasukan' not in chart_data.columns: chart_data['Pemasukan'] = 0
                 if 'Pengeluaran' not in chart_data.columns: chart_data['Pengeluaran'] = 0
-                
-                # Urutkan kolom dan render
                 st.bar_chart(chart_data[['Pemasukan', 'Pengeluaran']], color=["#4CAF50", "#FF4B4B"])
-            else:
-                st.info("Belum ada transaksi di tahun ini.")
-        else:
-            st.info("Belum ada data transaksi kas.")
+            else: st.info("Belum ada transaksi di tahun ini.")
+        else: st.info("Belum ada data transaksi kas.")
 
-    # --- 2. RIWAYAT KAS (FITUR YANG DIKEMBALIKAN) ---
+    # --- 2. RIWAYAT KAS ---
     elif choice == "Riwayat Kas":
         st.header("🗂️ Riwayat Transaksi Kas")
         df = get_data("transaksi")
-        
         if not df.empty:
-            # Tampilkan Tabel
             st.dataframe(df.sort_values(by='tanggal', ascending=False), use_container_width=True)
-            
-            # Fitur Hapus (Khusus Admin)
             if st.session_state['role'] == 'admin':
                 st.divider()
                 with st.expander("🗑️ Hapus Transaksi (Admin Only)"):
@@ -263,8 +344,7 @@ def main():
                         delete_row_by_id("transaksi", id_del)
                         st.success("Transaksi berhasil dihapus.")
                         st.rerun()
-        else:
-            st.info("Belum ada data riwayat transaksi.")
+        else: st.info("Belum ada data riwayat transaksi.")
 
     # --- 3. INPUT KAS ---
     elif choice == "Input Kas":
@@ -297,8 +377,8 @@ def main():
                     edited = st.data_editor(df_t, column_config={"id": st.column_config.TextColumn(disabled=True), "status": st.column_config.SelectboxColumn(options=["Belum Lunas", "Lunas"])}, hide_index=True)
                     if st.button("Simpan Perubahan"): save_all_data("tunggakan", edited); st.success("Disimpan!"); st.rerun()
                     with st.expander("Hapus Data"):
-                         id_del = st.text_input("Masukkan ID untuk Hapus")
-                         if st.button("Hapus Permanen"): delete_row_by_id("tunggakan", id_del); st.rerun()
+                          id_del = st.text_input("Masukkan ID untuk Hapus")
+                          if st.button("Hapus Permanen"): delete_row_by_id("tunggakan", id_del); st.rerun()
                 else: st.dataframe(df_t[df_t['status']=='Belum Lunas'])
             else: st.info("Kosong")
 
@@ -357,8 +437,89 @@ def main():
             if not df_ab.empty and st.button("Download PDF Arisan"):
                 pdf = create_pdf_universal(df_ab, f"Arisan {sel_month} {sel_year}", ['Nama', 'Periode', 'Nominal', 'Tgl'], ['nama_warga', 'periode', 'nominal', 'tanggal_bayar'], [50, 40, 40, 40])
                 st.download_button("Download", pdf, "arisan.pdf")
+    
+    # --- 6. CETAK KWITANSI (FITUR BARU) ---
+    elif choice == "Cetak Kwitansi":
+        st.header("🖨️ Cetak Kwitansi Iuran RT")
+        st.write("Menu ini digunakan untuk mencetak kwitansi bulanan.")
 
-    # --- 6. KELOLA KATEGORI ---
+        # DATA WARGA (Hardcode sesuai permintaan)
+        data_warga = [
+            {"no": 1, "nama": "Indomaret", "nominal": 460000},
+            {"no": 2, "nama": "Suparman", "nominal": 160000},
+            {"no": 3, "nama": "Aji Pamungkas", "nominal": 60000},
+            {"no": 4, "nama": "Andre Christianto", "nominal": 100000},
+            {"no": 5, "nama": "Hj. Darwin", "nominal": 60000},
+            {"no": 6, "nama": "Soedarnoto", "nominal": 60000},
+            {"no": 7, "nama": "dr. Eko Andrianto", "nominal": 100000},
+            {"no": 8, "nama": "Djoko S", "nominal": 60000},
+            {"no": 9, "nama": "H. Suwindi I", "nominal": 60000},
+            {"no": 10, "nama": "H. Suwindi II", "nominal": 50000},
+            {"no": 11, "nama": "Yusuf", "nominal": 60000},
+            {"no": 12, "nama": "Hj. Ngarjojo", "nominal": 60000},
+            {"no": 13, "nama": "Safri", "nominal": 60000},
+            {"no": 14, "nama": "H. Komarudin", "nominal": 60000},
+            {"no": 15, "nama": "Hj. Yuyanti I", "nominal": 60000},
+            {"no": 16, "nama": "Hj. Yuyanti II", "nominal": 60000},
+            {"no": 17, "nama": "H. Nugroho S", "nominal": 60000},
+            {"no": 18, "nama": "Amba Kosasih", "nominal": 60000},
+            {"no": 19, "nama": "Wawan", "nominal": 60000},
+            {"no": 20, "nama": "H. Hadi Djuweni", "nominal": 60000},
+            {"no": 21, "nama": "Priyo Utomo", "nominal": 60000},
+            {"no": 22, "nama": "Hamid", "nominal": 60000},
+            {"no": 23, "nama": "H. Hadi Sulistyo", "nominal": 95000},
+            {"no": 24, "nama": "Singgih Djarwanto", "nominal": 60000},
+            {"no": 25, "nama": "Nurhaini Agus S", "nominal": 60000},
+            {"no": 26, "nama": "Joko P", "nominal": 60000},
+            {"no": 27, "nama": "Lulus A", "nominal": 60000},
+            {"no": 28, "nama": "Liliek Djito", "nominal": 60000},
+            {"no": 29, "nama": "Budi Santoso", "nominal": 60000},
+            {"no": 30, "nama": "H. Slamet Kaslan", "nominal": 60000},
+            {"no": 31, "nama": "Annie H", "nominal": 60000},
+            {"no": 32, "nama": "Joni", "nominal": 60000},
+            {"no": 33, "nama": "Dayatno", "nominal": 60000},
+            {"no": 34, "nama": "Arif Munandar", "nominal": 60000},
+            {"no": 35, "nama": "Sie Sien", "nominal": 60000},
+            {"no": 36, "nama": "Taman RT / Lukman", "nominal": 100000},
+        ]
+
+        col1, col2 = st.columns(2)
+        with col1:
+            list_bulan = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", 
+                        "Juli", "Agustus", "September", "Oktober", "November", "Desember"]
+            pilih_bulan = st.selectbox("Pilih Bulan", list_bulan)
+        with col2:
+            pilih_tahun = st.number_input("Tahun", min_value=2024, max_value=2030, value=date.today().year)
+
+        if st.button("📄 Generate PDF Kwitansi"):
+            pdf = KwitansiPDF(orientation='P', unit='mm', format='A4')
+            pdf.set_auto_page_break(auto=False, margin=0)
+            pdf.add_page()
+
+            margin_top = 10
+            kwitansi_height = 55
+            gap = 5
+            max_per_page = 5
+            counter = 0
+            current_y = margin_top
+
+            for warga in data_warga:
+                if counter >= max_per_page:
+                    pdf.add_page()
+                    counter = 0
+                    current_y = margin_top
+                
+                pdf.buat_kwitansi(warga, pilih_bulan, int(pilih_tahun), current_y)
+                current_y += kwitansi_height + gap
+                counter += 1
+
+            pdf_output = pdf.output(dest='S').encode('latin-1')
+            nama_file = f"Kwitansi_RT_{pilih_bulan}_{pilih_tahun}.pdf"
+            
+            st.success(f"Kwitansi untuk {len(data_warga)} warga berhasil dibuat!")
+            st.download_button(label="⬇️ Download File PDF", data=pdf_output, file_name=nama_file, mime="application/pdf")
+
+    # --- 7. KELOLA KATEGORI ---
     elif choice == "Kelola Kategori":
         st.header("🏷️ Kelola Kategori")
         df_k = get_data("kategori")
@@ -373,7 +534,7 @@ def main():
                 add_row("kategori", ["1", "Iuran", "Pemasukan"])
                 st.rerun()
 
-    # --- 7. LAPORAN & USER ---
+    # --- 8. LAPORAN & USER ---
     elif choice == "Laporan Kas":
         st.header("🖨️ Laporan Kas")
         c_m, c_y = st.columns(2)
@@ -391,7 +552,5 @@ def main():
             if st.form_submit_button("Add"): add_row("users",[u,hash_pass(p),r,u]); st.success("Ok")
         st.dataframe(get_data("users"))
 
-
 if __name__ == '__main__':
     main()
-
