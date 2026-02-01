@@ -7,6 +7,8 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import uuid
 import random
+from fpdf import FPDF
+import io
 
 # --- KONFIGURASI ---
 SCOPE = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
@@ -391,3 +393,159 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+# ==========================================
+# MENU CETAK KWITANSI (FITUR BARU)
+# ==========================================
+if selected == "Cetak Kwitansi": # Pastikan nama variabel 'selected' sesuai dengan sidebar Anda
+
+    # --- MULAI COPY KODE DARI SINI ---
+
+    # 1. SETUP DATA WARGA (Hardcode sesuai request)
+    data_warga = [
+        {"no": 1, "nama": "Indomaret", "nominal": 460000},
+        {"no": 2, "nama": "Suparman", "nominal": 160000},
+        {"no": 3, "nama": "Aji Pamungkas", "nominal": 60000},
+        # ... (LANJUTKAN LIST DATA WARGA LENGKAP DARI JAWABAN SAYA SEBELUMNYA) ...
+        {"no": 36, "nama": "Taman RT / Lukman", "nominal": 100000},
+    ]
+
+    # 2. FUNGSI TERBILANG
+    def terbilang(n):
+        angka = ["", "Satu", "Dua", "Tiga", "Empat", "Lima", "Enam", "Tujuh", "Delapan", "Sembilan", "Sepuluh", "Sebelas"]
+        hasil = ""
+        n = int(n)
+        if n >= 0 and n <= 11:
+            hasil = angka[n]
+        elif n < 20:
+            hasil = terbilang(n - 10) + " Belas"
+        elif n < 100:
+            hasil = terbilang(n / 10) + " Puluh " + terbilang(n % 10)
+        elif n < 200:
+            hasil = "Seratus " + terbilang(n - 100)
+        elif n < 1000:
+            hasil = terbilang(n / 100) + " Ratus " + terbilang(n % 100)
+        elif n < 2000:
+            hasil = "Seribu " + terbilang(n - 1000)
+        elif n < 1000000:
+            hasil = terbilang(n / 1000) + " Ribu " + terbilang(n % 1000)
+        return hasil.strip()
+
+    # 3. CLASS PDF
+    class KwitansiPDF(FPDF):
+        def header(self):
+            pass 
+        def footer(self):
+            pass 
+
+        def buat_kwitansi(self, data, bulan, tahun, y_position):
+            self.set_xy(10, y_position)
+            self.rect(10, y_position, 195, 55) # Border Luar
+            self.line(40, y_position, 40, y_position + 55) # Garis Vertikal
+
+            # Header Kiri
+            self.set_font("Arial", "B", 12)
+            self.set_xy(10, y_position + 15)
+            self.multi_cell(30, 6, "RT.06 - RW.X\nPONDOK BERINGIN\nSEMARANG", align='C')
+
+            # Isi Kanan
+            start_x = 42
+
+            # Baris 1: No Urut RT
+            self.set_font("Arial", "", 10)
+            self.set_xy(start_x, y_position + 5)
+            self.cell(20, 5, "Kwitansi", 0, 0)
+            self.set_xy(start_x + 90, y_position + 5)
+            self.cell(25, 5, "No. urut RT :", 0, 0)
+            box_x = start_x + 115
+            for i in range(5):
+                self.rect(box_x + (i*6), y_position + 4, 6, 6)
+
+            # Baris 2: Telah terima dari
+            self.set_xy(start_x, y_position + 14)
+            self.cell(35, 6, "Telah terima dari", 0, 0)
+            self.cell(5, 6, ":", 0, 0)
+            self.set_font("Arial", "B", 10)
+            self.cell(100, 6, data['nama'], 0, 1)
+
+            # Baris 3: Uang Sejumlah
+            self.set_font("Arial", "", 10)
+            self.set_xy(start_x, y_position + 22)
+            self.cell(35, 6, "Uang sejumlah", 0, 0)
+            self.cell(5, 6, ":", 0, 0)
+            self.rect(start_x + 40, y_position + 22, 110, 6) # Kotak Terbilang
+            kalimat_terbilang = terbilang(data['nominal']) + " Rupiah"
+            self.set_xy(start_x + 42, y_position + 22)
+            self.set_font("Arial", "I", 10)
+            self.cell(105, 6, kalimat_terbilang, 0, 0)
+
+            # Baris 4: Untuk membayar
+            self.set_font("Arial", "", 10)
+            self.set_xy(start_x, y_position + 30)
+            self.cell(35, 6, "Untuk membayar", 0, 0)
+            self.cell(5, 6, ":", 0, 0)
+            self.set_font("Arial", "B", 10)
+            self.cell(100, 6, f"Iuran RT / RW   Bulan : {bulan} {tahun}", 0, 0)
+
+            # Footer: Angka & TTD
+            self.set_xy(start_x + 40, y_position + 42)
+            self.rect(start_x + 40, y_position + 41, 45, 8)
+            self.set_font("Arial", "B", 12)
+            formatted_money = "Rp. {:,.0f},-".format(data['nominal']).replace(",", ".")
+            self.cell(45, 6, formatted_money, 0, 0, 'L')
+
+            self.set_font("Arial", "", 10)
+            self.set_xy(start_x, y_position + 42)
+            self.cell(35, 6, "Terbilang", 0, 0)
+            self.cell(5, 6, ":", 0, 0)
+
+            self.set_font("Arial", "", 9)
+            self.set_xy(start_x + 100, y_position + 36)
+            self.cell(50, 5, f"Semarang, 01 {bulan} {tahun}", 0, 1, 'C')
+            self.set_xy(start_x + 100, y_position + 40)
+            self.cell(50, 4, "Bendahara RT. 06 RW.X Pondok Beringin Semarang", 0, 1, 'C')
+            self.set_font("Arial", "B", 10)
+            self.set_xy(start_x + 100, y_position + 49)
+            self.cell(50, 5, "AJI PAMUNGKAS", 0, 0, 'C')
+
+    # 4. TAMPILAN UI
+    st.title("🖨️ Cetak Kwitansi Iuran RT")
+    st.write("Menu ini digunakan untuk mencetak kwitansi bulanan.")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        list_bulan = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", 
+                    "Juli", "Agustus", "September", "Oktober", "November", "Desember"]
+        pilih_bulan = st.selectbox("Pilih Bulan", list_bulan)
+    with col2:
+        pilih_tahun = st.number_input("Tahun", min_value=2024, max_value=2030, value=date.today().year)
+
+    if st.button("📄 Generate PDF Kwitansi"):
+        pdf = KwitansiPDF(orientation='P', unit='mm', format='A4')
+        pdf.set_auto_page_break(auto=False, margin=0)
+        pdf.add_page()
+
+        margin_top = 10
+        kwitansi_height = 55
+        gap = 5
+        max_per_page = 5
+        counter = 0
+        current_y = margin_top
+
+        for warga in data_warga:
+            if counter >= max_per_page:
+                pdf.add_page()
+                counter = 0
+                current_y = margin_top
+
+            pdf.buat_kwitansi(warga, pilih_bulan, int(pilih_tahun), current_y)
+            current_y += kwitansi_height + gap
+            counter += 1
+
+        pdf_output = pdf.output(dest='S').encode('latin-1')
+        nama_file = f"Kwitansi_RT_{pilih_bulan}_{pilih_tahun}.pdf"
+
+        st.success(f"Kwitansi untuk {len(data_warga)} warga berhasil dibuat!")
+        st.download_button(label="⬇️ Download File PDF", data=pdf_output, file_name=nama_file, mime="application/pdf")
+
+    # --- AKHIR COPY KODE ---
