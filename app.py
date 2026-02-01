@@ -499,7 +499,7 @@ def main():
             margin_top = 10
             kwitansi_height = 55
             gap = 5
-            max_per_page = 5
+            max_per_page = 4 # DIUBAH DARI 5 MENJADI 4 AGAR TIDAK TERPOTONG
             counter = 0
             current_y = margin_top
 
@@ -554,3 +554,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
