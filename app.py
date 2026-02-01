@@ -390,10 +390,6 @@ def main():
             u=st.text_input("User"); p=st.text_input("Pass", type='password'); r=st.selectbox("Role",["warga","admin"])
             if st.form_submit_button("Add"): add_row("users",[u,hash_pass(p),r,u]); st.success("Ok")
         st.dataframe(get_data("users"))
-
-if __name__ == '__main__':
-    main()
-
 # ==========================================
 # MENU CETAK KWITANSI (FITUR BARU)
 # ==========================================
@@ -549,3 +545,9 @@ if selected == "Cetak Kwitansi": # Pastikan nama variabel 'selected' sesuai deng
         st.download_button(label="⬇️ Download File PDF", data=pdf_output, file_name=nama_file, mime="application/pdf")
 
     # --- AKHIR COPY KODE ---
+
+if __name__ == '__main__':
+    main()
+
+
+
